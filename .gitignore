@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+OptHelper.app/
+OptHelper.dmg
+*.dmg
+.DS_Store
+# Personal context generator: holds machine names, servers and org details. Keep it local.
+tools/
