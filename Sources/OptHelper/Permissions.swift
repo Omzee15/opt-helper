@@ -25,8 +25,8 @@ final class Permissions: ObservableObject {
         Target(name: "Terminal", bundleID: "com.apple.Terminal", why: "Running your terminal shortcuts"),
     ] + MusicApp.all.map {
         Target(name: $0.name, bundleID: $0.bundleID,
-               why: $0.isBrowser ? "Opening links, and controlling music playing in a tab" : "Showing and controlling what's playing")
-    }
+               why: "Opening links, and showing and controlling YouTube Music or Spotify playing in a tab")
+    } + [Target(name: "Spotify", bundleID: MusicApp.spotify.bundleID, why: "Showing what's playing, and playing your library records")]
 
     @Published private(set) var accessibility = false
     @Published private(set) var automation: [String: State] = [:]

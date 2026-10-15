@@ -8,19 +8,50 @@ struct DashboardView: View {
     @ObservedObject private var player = NowPlaying.shared
     @ObservedObject private var favorites = Favorites.shared
 
+    /// Coordinate space shared by the turntable and records dragged out of the library.
+    static let space = "dashboard"
+
+    @State private var drag: RecordDrag?
+    @State private var deck: CGRect = .zero
+
+    private var overDeck: Bool { drag.map { onDeck($0.point) } ?? false }
+
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            Phonograph(playing: player.track?.playing ?? false, artwork: player.artwork) { player.playPause() }
-            VStack(alignment: .leading, spacing: 10) {
-                nowPlaying
-                favoritesRow
+            Phonograph(playing: player.track?.playing ?? false, artwork: player.artwork, highlighted: overDeck) { player.playPause() }
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { deck = g.frame(in: .named(Self.space)) }
+                        .onChange(of: g.frame(in: .named(Self.space))) { deck = $0 }
+                })
+            if model.library {
+                LibraryView(drag: $drag, onDrop: { r, p in if onDeck(p) { player.play(r) } })
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    nowPlaying
+                    favoritesRow
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                ShelfView()
+                    .frame(width: 210)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            ShelfView()
-                .frame(width: 210)
+        }
+        .coordinateSpace(name: Self.space)
+        .overlay(alignment: .topLeading) {
+            // The record follows the pointer; it shrinks a little over the turntable, as if settling onto it.
+            if let d = drag {
+                VinylRecord(artwork: d.artwork, size: overDeck ? 64 : 72)
+                    .shadow(color: .black.opacity(0.6), radius: 8, y: 4)
+                    .position(d.point)
+                    .allowsHitTesting(false)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.8), value: overDeck)
+            }
         }
         .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 16)
     }
+
+    private func onDeck(_ p: CGPoint) -> Bool { deck.insetBy(dx: -8, dy: -8).contains(p) }
 
     private var nowPlaying: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -33,7 +64,7 @@ struct DashboardView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
                     Text(player.message ?? player.track.map { [$0.artist, $0.album].filter { !$0.isEmpty }.joined(separator: " — ") }
-                         ?? "Open Spotify or Music, or pick a playlist")
+                         ?? "Play something in Spotify or YouTube Music")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -79,8 +110,8 @@ struct DashboardView: View {
                     .buttonStyle(.plain)
                     .help(f.value)
                 }
-                Button { model.onOpenSettings?() } label: {
-                    Label(favorites.items.isEmpty ? "Add favorite playlists" : "Edit", systemImage: "plus")
+                Button { favorites.items.isEmpty ? (model.library = true) : model.onOpenSettings?() } label: {
+                    Label(favorites.items.isEmpty ? "Build your music library" : "Edit", systemImage: "plus")
                         .font(.system(size: 11))
                         .padding(.horizontal, 9).padding(.vertical, 5)
                         .background(Capsule().strokeBorder(Color.white.opacity(0.18)))
@@ -108,7 +139,7 @@ struct DashboardView: View {
     }
 }
 
-/// Small strip in the notch band itself: left of the notch shows what's playing,
+/// Small strip in the notch band itself: left of the notch holds the library button and what's playing,
 /// right of it holds the search and settings buttons. Mirrors a menu bar.
 struct DashboardHeader: View {
     @ObservedObject var model: LauncherModel
@@ -117,6 +148,14 @@ struct DashboardHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: 6) {
+                Button { model.library.toggle() } label: {
+                    Image(systemName: "square.stack.fill")
+                        .foregroundStyle(model.library ? Color.white : Color.secondary)
+                        .padding(.trailing, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(model.library ? "Back to now playing" : "Music library")
                 Image(systemName: player.track?.playing == true ? "waveform" : "music.note")
                     .foregroundStyle(player.track?.playing == true ? Color.green : Color.secondary)
                 Text(player.track.map { $0.artist.isEmpty ? $0.title : "\($0.title) · \($0.artist)" } ?? "OptHelper")
@@ -149,14 +188,15 @@ struct DashboardHeader: View {
 
 /// A turntable whose record spins while music plays. The label shows the album art,
 /// or stays a blank label when there is none. The tonearm swings onto the record on play.
+/// Records dragged out of the library are dropped onto it to play them.
 struct Phonograph: View {
     var playing: Bool
     var artwork: NSImage?
+    /// A record is being dragged over the turntable.
+    var highlighted = false
     /// Called when the tonearm is dropped onto the record (while paused) or lifted off it (while playing).
     var onToggle: () -> Void = {}
 
-    @State private var baseAngle: Double = 0
-    @State private var spinningSince: Date?
     /// Tonearm angle while it's being dragged; nil when it rests where `playing` puts it.
     @State private var dragAngle: Double?
     @State private var dragStart: (pointer: Double, arm: Double)?
@@ -169,63 +209,24 @@ struct Phonograph: View {
     private let size = CGSize(width: 150, height: 128)
     private let disc: CGFloat = 112
     private let pivot = CGPoint(x: 134, y: 16)
-    private let degreesPerSecond = 33.3 / 60 * 360  // 33⅓ rpm
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 12)
                 .fill(LinearGradient(colors: [Color(red: 0.36, green: 0.22, blue: 0.13), Color(red: 0.2, green: 0.12, blue: 0.07)],
                                      startPoint: .topLeading, endPoint: .bottomTrailing))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(highlighted ? Color.accentColor : Color.white.opacity(0.08), lineWidth: highlighted ? 2 : 1))
 
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: !playing)) { ctx in
-                record.rotationEffect(.degrees(angle(at: ctx.date)))
-            }
-            .frame(width: disc, height: disc)
-            .overlay(sheen)
+            SpinningRecord(playing: playing, artwork: artwork, size: disc)
+                .overlay(sheen)
             .offset(x: 8, y: (size.height - disc) / 2)
 
             tonearm
         }
         .frame(width: size.width, height: size.height)
         .coordinateSpace(name: "phonograph")
-        .onAppear { if playing { spinningSince = Date() } }
-        .onChange(of: playing) { now in
-            if now { spinningSince = Date() } else {
-                baseAngle = angle(at: Date())
-                spinningSince = nil
-            }
-        }
-    }
-
-    private func angle(at date: Date) -> Double {
-        baseAngle + (spinningSince.map { date.timeIntervalSince($0) } ?? 0) * degreesPerSecond
-    }
-
-    private var record: some View {
-        ZStack {
-            Circle().fill(Color(white: 0.06))
-            ForEach(0..<9) { i in
-                Circle()
-                    .stroke(Color.white.opacity(i % 3 == 0 ? 0.09 : 0.04), lineWidth: 0.6)
-                    .padding(CGFloat(4 + i * 4))
-            }
-            label.frame(width: disc * 0.38, height: disc * 0.38).clipShape(Circle())
-            Circle().fill(Color(white: 0.75)).frame(width: 5, height: 5)  // spindle
-        }
-    }
-
-    @ViewBuilder private var label: some View {
-        if let artwork {
-            Image(nsImage: artwork).resizable().aspectRatio(contentMode: .fill)
-        } else {
-            // Blank label; the stripe makes the spin visible.
-            ZStack {
-                Circle().fill(LinearGradient(colors: [Color(red: 0.85, green: 0.33, blue: 0.24), Color(red: 0.65, green: 0.2, blue: 0.16)],
-                                             startPoint: .top, endPoint: .bottom))
-                Capsule().fill(Color.white.opacity(0.35)).frame(width: disc * 0.22, height: 2).offset(y: -disc * 0.09)
-            }
-        }
+        .animation(.easeOut(duration: 0.15), value: highlighted)
     }
 
     /// Light reflection that stays still while the record turns underneath it.

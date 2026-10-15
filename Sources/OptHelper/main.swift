@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -9,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let preferences = PreferencesWindow()
     private let permissions = PermissionsWindow()
     private let settings = Settings.shared
+    private var trackWatch: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installEditMenu()
@@ -35,6 +37,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         hover = HoverTrigger(panel: panel)
         hover.start()
+        // Show or hide the record beside the collapsed notch as playback starts and stops.
+        trackWatch = NowPlaying.shared.$track
+            .map { $0?.playing == true }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.panel.updatePeek() }
+        NowPlaying.shared.idle()
         permissions.showIfFirstLaunch()
     }
 
@@ -136,6 +145,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hoverItem.target = self
         hoverItem.state = settings.hoverToOpen ? .on : .off
         menu.addItem(hoverItem)
+        let peekItem = NSMenuItem(title: "Show music beside the notch", action: #selector(togglePeek), keyEquivalent: "")
+        peekItem.target = self
+        peekItem.state = settings.notchPeek ? .on : .off
+        menu.addItem(peekItem)
         menu.addItem(withTitle: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Permissions…", action: #selector(openPermissions), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -247,6 +260,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggleHover() { settings.hoverToOpen.toggle() }
+
+    @objc private func togglePeek() {
+        settings.notchPeek.toggle()
+        if !(panel.isVisible && panel.model.expanded) { NowPlaying.shared.idle() }
+        panel.updatePeek()
+    }
 
     @objc private func openPreferences() {
         panel.dismiss()

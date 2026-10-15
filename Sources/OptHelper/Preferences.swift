@@ -67,12 +67,19 @@ struct PreferencesView: View {
     @ObservedObject var recorder: ShortcutRecorder
     @ObservedObject private var favorites = Favorites.shared
     @State private var hover = Settings.shared.hoverToOpen
+    @State private var peek = Settings.shared.notchPeek
+    @State private var spotifyInApp = Settings.shared.spotifyInApp
 
     var body: some View {
         Form {
             Section("Notch") {
                 Toggle("Open when the pointer reaches the notch", isOn: $hover)
                     .onChange(of: hover) { Settings.shared.hoverToOpen = $0 }
+                Toggle("Show the spinning record beside the notch while music plays", isOn: $peek)
+                    .onChange(of: peek) {
+                        Settings.shared.notchPeek = $0
+                        NowPlaying.shared.idle()
+                    }
                 LabeledContent("Shelf folder") {
                     Button("Show in Finder") { Shelf.shared.revealFolder() }
                 }
@@ -98,6 +105,19 @@ struct PreferencesView: View {
             }
 
             Section {
+                Toggle("Play Spotify records in the Spotify app", isOn: $spotifyInApp)
+                    .onChange(of: spotifyInApp) { Settings.shared.spotifyInApp = $0 }
+                    .disabled(!MusicApp.spotify.isInstalled)
+            } header: {
+                Text("Spotify")
+            } footer: {
+                Text(MusicApp.spotify.isInstalled
+                     ? "Uses the Spotify app on this Mac: no account connection needed. Turn off to play in the Spotify web player in your browser instead."
+                     : "The Spotify app isn't installed, so Spotify records play in the web player in your browser.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 ForEach($favorites.items) { $f in
                     // Grouped forms turn a TextField's title into a row label and squeeze the
                     // field itself; hide labels so each field gets a real, editable box.
@@ -105,7 +125,9 @@ struct PreferencesView: View {
                         HStack(spacing: 8) {
                             TextField("Name", text: $f.name, prompt: Text("Name"))
                             Picker("Source", selection: $f.source) {
-                                ForEach(FavoritePlaylist.Source.allCases, id: \.self) { Text($0.title).tag($0) }
+                                ForEach(FavoritePlaylist.Source.allCases.filter { $0 != .appleMusic || f.source == .appleMusic }, id: \.self) {
+                                    Text($0.title).tag($0)
+                                }
                             }
                             .frame(width: 130)
                             Button { favorites.items.removeAll { $0.id == f.id } } label: { Image(systemName: "minus.circle") }
@@ -120,17 +142,17 @@ struct PreferencesView: View {
                 }
                 Button {
                     favorites.items.append(FavoritePlaylist(name: "", source: .spotify, value: ""))
-                } label: { Label("Add playlist", systemImage: "plus") }
+                } label: { Label("Add record", systemImage: "plus") }
             } header: {
-                Text("Favorite playlists")
+                Text("Music library")
             } footer: {
-                Text("Shown on the notch dashboard. Apple Music plays a playlist from your library by name; Spotify takes a playlist link or URI.")
+                Text("Records in the notch's music library (the stack button, top left). Spotify records play in the Spotify app; links (e.g. YouTube Music) just open. To add a playlist, copy its link in Spotify (Share › Copy link) and paste it in the notch library, or drag it from Spotify onto the notch.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .frame(width: 620)
-        .frame(minHeight: 460)
+        .frame(minHeight: 560)
     }
 }
 

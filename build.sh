@@ -22,7 +22,7 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundleVersion</key><string>$BUILD</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 <key>LSUIElement</key><true/>
-<key>NSAppleEventsUsageDescription</key><string>OptHelper opens links in a Safari profile, runs your terminal shortcuts in Terminal, and shows and controls what Spotify or Music is playing.</string>
+<key>NSAppleEventsUsageDescription</key><string>OptHelper opens links in a Safari profile, runs your terminal shortcuts in Terminal, and shows and controls the Spotify app, or YouTube Music and the Spotify web player in your browser.</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict></plist>
 PL

@@ -24,7 +24,7 @@ struct HotKeyChoice: Equatable {
     static let all = [optionSpace, commandSpace]
 }
 
-/// A playlist pinned to the notch dashboard.
+/// A record in the notch music library: a playlist, album or song.
 struct FavoritePlaylist: Codable, Equatable, Identifiable {
     enum Source: String, Codable, CaseIterable {
         case appleMusic, spotify, link
@@ -38,9 +38,9 @@ struct FavoritePlaylist: Codable, Equatable, Identifiable {
         /// What `value` holds for this source.
         var hint: String {
             switch self {
-            case .appleMusic: return "Playlist name in your library"
+            case .appleMusic: return "Not supported; use a Spotify or YouTube Music link"
             case .spotify: return "spotify:playlist:… or open.spotify.com link"
-            case .link: return "Any URL (YouTube, music.apple.com, …)"
+            case .link: return "Any URL, e.g. a YouTube Music playlist"
             }
         }
     }
@@ -48,6 +48,9 @@ struct FavoritePlaylist: Codable, Equatable, Identifiable {
     var name: String
     var source: Source
     var value: String
+    /// Cover art URL and a second line (artist, owner), filled in for records in the music library.
+    var artwork: String?
+    var subtitle: String?
 }
 
 /// User preferences, persisted in UserDefaults.
@@ -85,6 +88,18 @@ final class Settings {
     var hoverToOpen: Bool {
         get { d.object(forKey: "hoverToOpen") as? Bool ?? true }
         set { d.set(newValue, forKey: "hoverToOpen") }
+    }
+
+    /// While music plays, the collapsed notch shows the spinning record beside it.
+    var notchPeek: Bool {
+        get { d.object(forKey: "notchPeek") as? Bool ?? true }
+        set { d.set(newValue, forKey: "notchPeek") }
+    }
+
+    /// Spotify records play in the installed Spotify app (true) or the Spotify web player.
+    var spotifyInApp: Bool {
+        get { d.object(forKey: "spotifyInApp") as? Bool ?? true }
+        set { d.set(newValue, forKey: "spotifyInApp") }
     }
 
     var favorites: [FavoritePlaylist] {

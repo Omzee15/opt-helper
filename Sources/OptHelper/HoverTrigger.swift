@@ -45,7 +45,7 @@ final class HoverTrigger {
         }
 
         leftAt = nil
-        guard Settings.shared.hoverToOpen, let zone = Self.hotZone(at: p), zone.contains(p) else {
+        guard Settings.shared.hoverToOpen, let zone = Self.hotZone(at: p, leftExtra: panel.peekWing), zone.contains(p) else {
             enteredAt = nil
             armed = true
             return
@@ -62,12 +62,12 @@ final class HoverTrigger {
         }
     }
 
-    /// The notch plus a little slack on each side, at the top edge of the pointer's screen.
-    private static func hotZone(at p: NSPoint) -> NSRect? {
+    /// The notch plus a little slack on each side (and the peeking record), at the top edge of the pointer's screen.
+    private static func hotZone(at p: NSPoint, leftExtra: CGFloat) -> NSRect? {
         guard let screen = NSScreen.screens.first(where: { $0.frame.insetBy(dx: 0, dy: -2).contains(p) }) else { return nil }
         let notch = NotchMetrics.notch(for: screen)
         let f = screen.frame
         let w = notch.width + 40
-        return NSRect(x: f.midX - w / 2, y: f.maxY - notch.height, width: w, height: notch.height + 2)
+        return NSRect(x: f.midX - w / 2 - leftExtra, y: f.maxY - notch.height, width: w + leftExtra, height: notch.height + 2)
     }
 }

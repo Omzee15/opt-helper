@@ -15,6 +15,10 @@ final class LauncherModel: ObservableObject {
     @Published var busy = false
     /// Grown out of the notch (true) or tucked back into it (false).
     @Published var expanded = false
+    /// Collapsed, but showing the spinning record beside the notch because music is playing.
+    @Published var peek = false
+    /// The dashboard shows the music library instead of the player controls and shelf.
+    @Published var library = false
     /// Size of the hardware notch, or a menu-bar-sized stand-in on screens without one.
     @Published var notch = CGSize(width: 190, height: 32)
     var onSubmit: ((String) -> Void)?
@@ -33,6 +37,9 @@ enum NotchMetrics {
     static let corner: CGFloat = 24      // bottom corner radius when expanded
     static let maxContent: CGFloat = 180 // room below the notch for the tallest mode
     static let shadowPad: CGFloat = 36
+
+    /// Extra width left of the collapsed notch that holds the spinning record.
+    static func peekWing(_ notch: CGSize) -> CGFloat { notch.height + 6 }
 
     static func notch(for screen: NSScreen) -> CGSize {
         if screen.safeAreaInsets.top > 0,
@@ -89,7 +96,8 @@ struct LauncherView: View {
         let open = model.expanded
         let flare = open ? NotchMetrics.flare : 6
         let shape = NotchShape(flare: flare, corner: open ? NotchMetrics.corner : 10)
-        let width = (open ? model.mode.width : model.notch.width) + 2 * flare
+        let wing = !open && model.peek ? NotchMetrics.peekWing(model.notch) : 0
+        let width = (open ? model.mode.width : model.notch.width) + 2 * flare + wing
         let height = model.notch.height + (open ? contentHeight : 0)
 
         ZStack(alignment: .top) {
@@ -105,15 +113,28 @@ struct LauncherView: View {
             .frame(width: model.mode.width, alignment: .top)
             .opacity(open ? 1 : 0)
             .scaleEffect(open ? 1 : 0.85, anchor: .top)
+
+            if model.peek && !open {
+                // Sized to the visible island explicitly: the ZStack itself is as wide as the
+                // (hidden) dashboard content, so aligning to its edge would land off-screen.
+                NotchPeekRecord(size: model.notch.height - 8)
+                    .frame(width: wing, height: model.notch.height)
+                    .padding(.leading, flare)
+                    .frame(width: width, alignment: .leading)
+                    .transition(.opacity)
+            }
         }
         .frame(width: width, height: height, alignment: .top)
         .clipShape(shape)
+        // The wing grows to the left only, so the notch itself stays put.
+        .offset(x: -wing / 2)
         .shadow(color: .black.opacity(open ? 0.45 : 0), radius: 18, y: 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.42, dampingFraction: 0.78), value: open)
         .animation(.spring(response: 0.3, dampingFraction: 0.9), value: contentHeight)
         .environment(\.colorScheme, .dark)
         .animation(.spring(response: 0.36, dampingFraction: 0.85), value: model.mode)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: model.peek)
         .onChange(of: open) { focused = $0 && model.mode == .launcher }
         .onChange(of: model.mode) { m in
             DispatchQueue.main.async { focused = open && m == .launcher }
@@ -223,11 +244,11 @@ final class LauncherPanel: NSPanel {
     /// Escape closes the dashboard (the launcher's text field handles its own).
     override func cancelOperation(_ sender: Any?) { dismiss() }
 
-    /// ⌘V on the dashboard pastes into the shelf.
+    /// ⌘V on the dashboard pastes into the shelf, or a copied Spotify link into the library.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if model.mode == .dashboard, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
            event.charactersIgnoringModifiers == "v" {
-            Shelf.shared.paste()
+            if MusicLibrary.add(from: .general) { model.library = true } else { Shelf.shared.paste() }
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -235,14 +256,16 @@ final class LauncherPanel: NSPanel {
 
     /// The launcher activates the app; a hover-opened dashboard only takes key focus.
     func present(_ mode: NotchMode = .launcher, byHover: Bool = false) {
+        ignoresMouseEvents = false
         if isVisible && model.expanded {
             model.mode = mode
             if mode == .launcher { NSApp.activate(ignoringOtherApps: true); makeKey() }
-            mode == .dashboard ? NowPlaying.shared.start() : NowPlaying.shared.stop()
+            mode == .dashboard ? NowPlaying.shared.start() : NowPlaying.shared.idle()
             return
         }
         model.mode = mode
         model.openedByHover = byHover
+        model.library = false  // every fresh open starts on the player, not where it was left
         model.text = ""
         model.status = ""
         model.isError = false
@@ -256,7 +279,7 @@ final class LauncherPanel: NSPanel {
         let f = screen.frame
         setFrame(NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h), display: true)
 
-        mode == .dashboard ? NowPlaying.shared.start() : NowPlaying.shared.stop()
+        mode == .dashboard ? NowPlaying.shared.start() : NowPlaying.shared.idle()
         if byHover {
             // Key without activating the app: keystrokes reach the island (so typing starts
             // a search) while the app you were in stays frontmost.
@@ -271,6 +294,7 @@ final class LauncherPanel: NSPanel {
 
     /// Re-open after an error, in case the panel already started retracting.
     func reveal() {
+        ignoresMouseEvents = false
         model.expanded = true
         makeKeyAndOrderFront(nil)
     }
@@ -282,9 +306,43 @@ final class LauncherPanel: NSPanel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self, !self.model.expanded else { return }
             self.orderOut(nil)
-            NowPlaying.shared.stop()
+            NowPlaying.shared.idle()
+            self.updatePeek()
         }
     }
+
+    // MARK: Peek
+
+    /// The screen with a camera notch; the peek only makes sense beside a real one.
+    private static var notchedScreen: NSScreen? { NSScreen.screens.first { $0.safeAreaInsets.top > 0 } }
+
+    /// While collapsed: show the spinning record beside the notch if music plays, else hide.
+    /// The peek is display only. It ignores the mouse and never takes key focus, so typing
+    /// stays in the app you're using; hovering the notch still opens the dashboard.
+    func updatePeek() {
+        guard !model.expanded else { return }
+        let want = Settings.shared.notchPeek && NowPlaying.shared.track?.playing == true && Self.notchedScreen != nil
+        if want {
+            guard !isVisible || !model.peek, let screen = Self.notchedScreen else { return }
+            model.notch = NotchMetrics.notch(for: screen)
+            let w = NotchMetrics.maxWidth + 2 * NotchMetrics.flare + 2 * NotchMetrics.shadowPad
+            let h = model.notch.height + NotchMetrics.maxContent + NotchMetrics.shadowPad
+            let f = screen.frame
+            setFrame(NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h), display: false)
+            ignoresMouseEvents = true
+            orderFrontRegardless()
+            model.peek = true
+        } else if model.peek {
+            model.peek = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, !self.model.expanded, !self.model.peek else { return }
+                self.orderOut(nil)
+            }
+        }
+    }
+
+    /// Width of the peek left of the notch, so hovering the record opens the dashboard too.
+    var peekWing: CGFloat { model.peek && !model.expanded ? NotchMetrics.peekWing(model.notch) : 0 }
 }
 
 /// Hosts the island and makes all of it a drop target for the shelf, so a file can be
@@ -328,6 +386,11 @@ final class NotchHostingView: NSHostingView<LauncherView> {
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { accepts(sender) }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         Shelf.shared.dropTargeted = false
+        // Songs and playlists dragged from Spotify go into the music library, not the shelf.
+        if MusicLibrary.add(from: sender.draggingPasteboard) {
+            panel?.model.library = true
+            return true
+        }
         return Shelf.shared.paste(from: sender.draggingPasteboard)
     }
 
